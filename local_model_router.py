@@ -15,6 +15,7 @@ Usage:
 import os
 import sys
 import time
+import platform
 import subprocess
 from datetime import datetime
 
@@ -22,38 +23,52 @@ from openai import OpenAI
 
 from config import (
     BASE_URL, API_KEY, DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE,
-    LOAD_WAIT_SECONDS, MODELS, STAGES, OUTPUT_DIR, DEFAULT_TASK,
+    LOAD_WAIT_SECONDS, LMS_TIMEOUT_SECONDS, MODELS, STAGES,
+    OUTPUT_DIR, DEFAULT_TASK,
 )
 from prompts import PROMPT_BUILDERS
+
+
+# On Windows, lms is often a .cmd shim — subprocess needs shell=True to find it
+_IS_WINDOWS = platform.system() == "Windows"
 
 
 # ---------------------------------------------------------------------------
 # Model management via lms CLI
 # ---------------------------------------------------------------------------
 
-def lms_run(command: list[str], label: str) -> bool:
+def lms_run(command: list[str], label: str, timeout: int = LMS_TIMEOUT_SECONDS) -> bool:
     """Run an lms CLI command. Returns True on success."""
     cmd = ["lms"] + command
     print(f"  Running: {' '.join(cmd)}")
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=timeout, shell=_IS_WINDOWS,
+        )
         if result.returncode != 0:
-            stderr = result.stderr.strip()
-            print(f"  [WARN] {label} returned code {result.returncode}: {stderr[:200]}")
+            stderr = (result.stderr or "").strip()
+            stdout = (result.stdout or "").strip()
+            detail = stderr or stdout
+            print(f"  [WARN] {label} returned code {result.returncode}: {detail[:200]}")
             return False
         return True
     except FileNotFoundError:
         print(f"  [ERROR] lms CLI not found. Cannot {label}.")
+        print(f"  [HINT]  Make sure LM Studio CLI is in your PATH.")
         return False
     except subprocess.TimeoutExpired:
-        print(f"  [ERROR] lms CLI timed out during {label}.")
+        print(f"  [ERROR] lms CLI timed out ({timeout}s) during {label}.")
         return False
 
 
 def unload_all():
     """Unload all currently loaded models."""
     print("[UNLOAD] Unloading all models ...")
-    lms_run(["unload", "--all"], "unload all")
+    # Try --all first; if it fails, fall back to unloading without args
+    if not lms_run(["unload", "--all"], "unload --all", timeout=60):
+        print("  [INFO] --all flag may not be supported; trying plain unload ...")
+        lms_run(["unload"], "unload", timeout=60)
 
 
 def load_model(model_id: str) -> bool:
@@ -64,6 +79,34 @@ def load_model(model_id: str) -> bool:
         print(f"  Waiting {LOAD_WAIT_SECONDS}s for model to initialize ...")
         time.sleep(LOAD_WAIT_SECONDS)
     return success
+
+
+# ---------------------------------------------------------------------------
+# Detect loaded model ID from the server
+# ---------------------------------------------------------------------------
+
+def get_loaded_model_id(client: OpenAI, expected_fragment: str) -> str | None:
+    """
+    Ask the LM Studio server which models are loaded and return the one
+    whose ID contains the expected_fragment (e.g. 'qwen3-14b').
+    Falls back to the first loaded model if no match.
+    LM Studio may report model IDs differently from lms CLI names.
+    """
+    try:
+        models = client.models.list()
+        model_ids = [m.id for m in models.data]
+        if not model_ids:
+            return None
+        # Try to match by fragment (e.g. "qwen3-14b" in "qwen-qwen3-14b-GGUF")
+        for mid in model_ids:
+            if expected_fragment.lower() in mid.lower():
+                return mid
+        # No exact match — return first loaded model
+        print(f"  [INFO] Expected '{expected_fragment}' but server reports: {model_ids}")
+        print(f"  [INFO] Using first loaded model: {model_ids[0]}")
+        return model_ids[0]
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +157,7 @@ def run_pipeline(task: str):
         print("[OK]    Server is reachable.\n")
     except Exception as e:
         print(f"[FAIL]  Cannot reach LM Studio at {BASE_URL}: {e}")
-        print("[HINT]  Start LM Studio and enable the local server.")
+        print("[HINT]  Start LM Studio and enable the local server (port 1234).")
         sys.exit(1)
 
     print("=" * 70)
@@ -127,19 +170,30 @@ def run_pipeline(task: str):
     stage_outputs = {}
 
     for stage_key, stage_label in STAGES:
-        model_id = MODELS[stage_key]
+        config_model_id = MODELS[stage_key]
 
         print(f"\n{'—' * 70}")
         print(f"[{stage_label}]")
-        print(f"  Model: {model_id}")
+        print(f"  Model: {config_model_id}")
         print(f"{'—' * 70}")
 
         # Unload previous, load current
         unload_all()
-        if not load_model(model_id):
-            print(f"  [ERROR] Failed to load {model_id}. Skipping stage.")
-            stage_outputs[stage_key] = f"[SKIPPED — failed to load {model_id}]"
+        if not load_model(config_model_id):
+            print(f"  [ERROR] Failed to load {config_model_id}. Skipping stage.")
+            stage_outputs[stage_key] = f"[SKIPPED — failed to load {config_model_id}]"
             continue
+
+        # Resolve actual model ID from the server (may differ from config name)
+        # Use last part of model path as the match fragment
+        fragment = config_model_id.split("/")[-1]
+        actual_model_id = get_loaded_model_id(client, fragment)
+        if actual_model_id is None:
+            print(f"  [ERROR] No model appears loaded on the server after lms load.")
+            stage_outputs[stage_key] = f"[SKIPPED — model not detected on server]"
+            continue
+        if actual_model_id != config_model_id:
+            print(f"  [INFO] Server reports model as: {actual_model_id}")
 
         # Build prompt based on stage
         if stage_key == "synthesis":
@@ -157,7 +211,7 @@ def run_pipeline(task: str):
 
         # Call model
         print("  Calling model ...")
-        output = call_model(client, model_id, messages)
+        output = call_model(client, actual_model_id, messages)
         stage_outputs[stage_key] = output
 
         # Save output

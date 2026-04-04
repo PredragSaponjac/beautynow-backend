@@ -4,10 +4,13 @@ Usage: python test_local.py
 """
 
 import sys
+import platform
 import subprocess
 from openai import OpenAI
 
 from config import BASE_URL, API_KEY, DEFAULT_MAX_TOKENS
+
+_IS_WINDOWS = platform.system() == "Windows"
 
 
 def check_server():
@@ -35,7 +38,8 @@ def check_lms_cli():
     try:
         result = subprocess.run(
             ["lms", "status"],
-            capture_output=True, text=True, timeout=15
+            capture_output=True, text=True, timeout=15,
+            shell=_IS_WINDOWS,
         )
         print(f"[OK]   lms CLI works. Output: {result.stdout.strip()[:120]}")
     except FileNotFoundError:

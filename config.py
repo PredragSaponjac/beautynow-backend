@@ -12,7 +12,10 @@ DEFAULT_MAX_TOKENS = 2048
 DEFAULT_TEMPERATURE = 0.7
 
 # Pause (seconds) after loading a model before sending requests
-LOAD_WAIT_SECONDS = 5
+LOAD_WAIT_SECONDS = 8
+
+# Timeout (seconds) for lms CLI commands (loading 14B models can be slow)
+LMS_TIMEOUT_SECONDS = 300
 
 # Model identifiers — must match what LM Studio has downloaded
 MODELS = {
