@@ -7,12 +7,17 @@ Runs a task through 4 stages, each using a different local LM Studio model:
   3. VERIFY     — microsoft/phi-4-reasoning-plus
   4. CODE       — qwen/qwen2.5-coder-14b
 
+LM Studio advertises all downloaded models via the API and loads them
+on-demand when a request arrives. Between stages we unload via lms CLI
+to free VRAM so only one large model is active at a time.
+
 Usage:
   python local_model_router.py                     # uses default task
   python local_model_router.py "Your custom task"  # custom task
 """
 
 import os
+import re
 import sys
 import time
 import platform
@@ -52,6 +57,9 @@ def lms_run(command: list[str], label: str, timeout: int = LMS_TIMEOUT_SECONDS) 
             detail = stderr or stdout
             print(f"  [WARN] {label} returned code {result.returncode}: {detail[:200]}")
             return False
+        stdout = (result.stdout or "").strip()
+        if stdout:
+            print(f"  {stdout[:150]}")
         return True
     except FileNotFoundError:
         print(f"  [ERROR] lms CLI not found. Cannot {label}.")
@@ -63,50 +71,24 @@ def lms_run(command: list[str], label: str, timeout: int = LMS_TIMEOUT_SECONDS) 
 
 
 def unload_all():
-    """Unload all currently loaded models."""
-    print("[UNLOAD] Unloading all models ...")
-    # Try --all first; if it fails, fall back to unloading without args
+    """Unload all currently loaded models to free VRAM."""
+    print("[UNLOAD] Freeing VRAM ...")
     if not lms_run(["unload", "--all"], "unload --all", timeout=60):
-        print("  [INFO] --all flag may not be supported; trying plain unload ...")
         lms_run(["unload"], "unload", timeout=60)
+    # Short pause to let GPU memory settle
+    time.sleep(2)
 
 
-def load_model(model_id: str) -> bool:
-    """Load a specific model into LM Studio."""
-    print(f"[LOAD] Loading {model_id} ...")
-    success = lms_run(["load", model_id], f"load {model_id}")
-    if success:
-        print(f"  Waiting {LOAD_WAIT_SECONDS}s for model to initialize ...")
-        time.sleep(LOAD_WAIT_SECONDS)
-    return success
-
-
-# ---------------------------------------------------------------------------
-# Detect loaded model ID from the server
-# ---------------------------------------------------------------------------
-
-def get_loaded_model_id(client: OpenAI, expected_fragment: str) -> str | None:
+def ensure_model_loaded(model_id: str):
     """
-    Ask the LM Studio server which models are loaded and return the one
-    whose ID contains the expected_fragment (e.g. 'qwen3-14b').
-    Falls back to the first loaded model if no match.
-    LM Studio may report model IDs differently from lms CLI names.
+    Use lms CLI to explicitly load a model.
+    LM Studio can auto-load on request, but explicit loading gives us
+    control and lets us confirm the model is ready.
     """
-    try:
-        models = client.models.list()
-        model_ids = [m.id for m in models.data]
-        if not model_ids:
-            return None
-        # Try to match by fragment (e.g. "qwen3-14b" in "qwen-qwen3-14b-GGUF")
-        for mid in model_ids:
-            if expected_fragment.lower() in mid.lower():
-                return mid
-        # No exact match — return first loaded model
-        print(f"  [INFO] Expected '{expected_fragment}' but server reports: {model_ids}")
-        print(f"  [INFO] Using first loaded model: {model_ids[0]}")
-        return model_ids[0]
-    except Exception:
-        return None
+    print(f"[LOAD] Ensuring {model_id} is ready ...")
+    lms_run(["load", model_id], f"load {model_id}")
+    print(f"  Waiting {LOAD_WAIT_SECONDS}s for model to initialize ...")
+    time.sleep(LOAD_WAIT_SECONDS)
 
 
 # ---------------------------------------------------------------------------
@@ -114,12 +96,11 @@ def get_loaded_model_id(client: OpenAI, expected_fragment: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 def call_model(client: OpenAI, model_id: str, messages: list[dict]) -> str:
-    """Send a chat completion request to the loaded model."""
+    """Send a chat completion request to the model."""
     try:
-        # Qwen3 models have a "thinking" mode that can cause parse errors
-        # in LM Studio. Disable it by adding /no_think to the last user message.
-        patched_messages = _patch_qwen3_thinking(model_id, messages)
+        patched_messages = _patch_thinking_models(model_id, messages)
 
+        print(f"  Sending request to {model_id} (max_tokens={DEFAULT_MAX_TOKENS}) ...")
         response = client.chat.completions.create(
             model=model_id,
             messages=patched_messages,
@@ -127,17 +108,23 @@ def call_model(client: OpenAI, model_id: str, messages: list[dict]) -> str:
             temperature=DEFAULT_TEMPERATURE,
         )
         content = response.choices[0].message.content or ""
-        # Strip any <think>...</think> blocks that may leak through
         content = _strip_think_tags(content)
         return content.strip()
     except Exception as e:
         return f"[ERROR] Model call failed: {e}"
 
 
-def _patch_qwen3_thinking(model_id: str, messages: list[dict]) -> list[dict]:
-    """For Qwen3 models, append /no_think to disable internal reasoning."""
-    if "qwen3" not in model_id.lower():
+def _patch_thinking_models(model_id: str, messages: list[dict]) -> list[dict]:
+    """
+    Disable thinking/reasoning mode for models that use it.
+    - Qwen3 models: append /no_think
+    - DeepSeek R1 models: also append /no_think (similar issue)
+    """
+    needs_patch = any(tag in model_id.lower() for tag in ["qwen3", "deepseek-r1"])
+    if not needs_patch:
         return messages
+
+    print(f"  [INFO] Thinking-mode model detected — adding /no_think")
     patched = []
     for i, msg in enumerate(messages):
         if i == len(messages) - 1 and msg.get("role") == "user":
@@ -146,8 +133,6 @@ def _patch_qwen3_thinking(model_id: str, messages: list[dict]) -> list[dict]:
             patched.append(msg)
     return patched
 
-
-import re
 
 def _strip_think_tags(text: str) -> str:
     """Remove <think>...</think> blocks from model output."""
@@ -180,8 +165,16 @@ def run_pipeline(task: str):
     # Verify server is reachable
     print("\n[CHECK] Verifying LM Studio server ...")
     try:
-        client.models.list()
-        print("[OK]    Server is reachable.\n")
+        models = client.models.list()
+        available = [m.id for m in models.data]
+        print(f"[OK]    Server is reachable. Available models: {len(available)}")
+
+        # Verify our required models are available
+        for stage_key, _ in STAGES:
+            mid = MODELS[stage_key]
+            if mid not in available:
+                print(f"[WARN]  Model '{mid}' not found in LM Studio. Stage may fail.")
+        print()
     except Exception as e:
         print(f"[FAIL]  Cannot reach LM Studio at {BASE_URL}: {e}")
         print("[HINT]  Start LM Studio and enable the local server (port 1234).")
@@ -193,34 +186,23 @@ def run_pipeline(task: str):
     print(f"  Task   : {task[:80]}{'...' if len(task) > 80 else ''}")
     print("=" * 70)
 
+    # Start clean — unload anything in memory
+    unload_all()
+
     # Collect outputs from each stage to feed into the next
     stage_outputs = {}
 
     for stage_key, stage_label in STAGES:
-        config_model_id = MODELS[stage_key]
+        model_id = MODELS[stage_key]
 
         print(f"\n{'—' * 70}")
         print(f"[{stage_label}]")
-        print(f"  Model: {config_model_id}")
+        print(f"  Model: {model_id}")
         print(f"{'—' * 70}")
 
-        # Unload previous, load current
+        # Load this stage's model (unload previous first)
         unload_all()
-        if not load_model(config_model_id):
-            print(f"  [ERROR] Failed to load {config_model_id}. Skipping stage.")
-            stage_outputs[stage_key] = f"[SKIPPED — failed to load {config_model_id}]"
-            continue
-
-        # Resolve actual model ID from the server (may differ from config name)
-        # Use last part of model path as the match fragment
-        fragment = config_model_id.split("/")[-1]
-        actual_model_id = get_loaded_model_id(client, fragment)
-        if actual_model_id is None:
-            print(f"  [ERROR] No model appears loaded on the server after lms load.")
-            stage_outputs[stage_key] = f"[SKIPPED — model not detected on server]"
-            continue
-        if actual_model_id != config_model_id:
-            print(f"  [INFO] Server reports model as: {actual_model_id}")
+        ensure_model_loaded(model_id)
 
         # Build prompt based on stage
         if stage_key == "synthesis":
@@ -237,9 +219,14 @@ def run_pipeline(task: str):
             messages = PROMPT_BUILDERS[stage_key](task, stage_outputs.get("verifier", ""))
 
         # Call model
-        print("  Calling model ...")
-        output = call_model(client, actual_model_id, messages)
-        stage_outputs[stage_key] = output
+        output = call_model(client, model_id, messages)
+
+        # Check for errors
+        if output.startswith("[ERROR]"):
+            print(f"  {output}")
+            stage_outputs[stage_key] = output
+        else:
+            stage_outputs[stage_key] = output
 
         # Save output
         filepath = save_output(stage_key, output, run_id)
