@@ -85,11 +85,13 @@ def unload_all():
 def ensure_model_loaded(model_id: str):
     """
     Use lms CLI to explicitly load a model.
-    LM Studio can auto-load on request, but explicit loading gives us
-    control and lets us confirm the model is ready.
+    Uses --gpu 0 to force CPU-only loading (this machine has only 2GB VRAM).
     """
     print(f"[LOAD] Ensuring {model_id} is ready ...")
-    lms_run(["load", model_id], f"load {model_id}")
+    # Try with --gpu 0 first (CPU-only), fall back to default if flag not supported
+    if not lms_run(["load", model_id, "--gpu", "0"], f"load {model_id}"):
+        print("  [INFO] Retrying without --gpu flag ...")
+        lms_run(["load", model_id], f"load {model_id}")
     print(f"  Waiting {LOAD_WAIT_SECONDS}s for model to initialize ...")
     time.sleep(LOAD_WAIT_SECONDS)
 
