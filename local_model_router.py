@@ -28,7 +28,8 @@ from openai import OpenAI
 
 from config import (
     BASE_URL, API_KEY, DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE,
-    LOAD_WAIT_SECONDS, LMS_TIMEOUT_SECONDS, MODELS, STAGES,
+    LOAD_WAIT_SECONDS, LMS_TIMEOUT_SECONDS, HTTP_TIMEOUT_SECONDS,
+    MAX_RETRIES, RETRY_WAIT_SECONDS, MODELS, STAGES,
     OUTPUT_DIR, DEFAULT_TASK,
 )
 from prompts import PROMPT_BUILDERS
@@ -76,8 +77,9 @@ def unload_all():
     print("[UNLOAD] Freeing VRAM ...")
     if not lms_run(["unload", "--all"], "unload --all", timeout=60):
         lms_run(["unload"], "unload", timeout=60)
-    # Short pause to let GPU memory settle
-    time.sleep(2)
+    # Give GPU memory time to fully release
+    print("  Waiting 5s for VRAM to clear ...")
+    time.sleep(5)
 
 
 def ensure_model_loaded(model_id: str):
@@ -97,22 +99,38 @@ def ensure_model_loaded(model_id: str):
 # ---------------------------------------------------------------------------
 
 def call_model(client: OpenAI, model_id: str, messages: list[dict]) -> str:
-    """Send a chat completion request to the model."""
-    try:
-        patched_messages = _patch_thinking_models(model_id, messages)
+    """Send a chat completion request to the model, with retry on transient errors."""
+    patched_messages = _patch_thinking_models(model_id, messages)
 
-        print(f"  Sending request to {model_id} (max_tokens={DEFAULT_MAX_TOKENS}) ...")
-        response = client.chat.completions.create(
-            model=model_id,
-            messages=patched_messages,
-            max_tokens=DEFAULT_MAX_TOKENS,
-            temperature=DEFAULT_TEMPERATURE,
-        )
-        content = response.choices[0].message.content or ""
-        content = _strip_think_tags(content)
-        return content.strip()
-    except Exception as e:
-        return f"[ERROR] Model call failed: {e}"
+    for attempt in range(1, MAX_RETRIES + 2):  # +2 because range is exclusive and attempt 1 is first try
+        try:
+            if attempt > 1:
+                print(f"  Retry {attempt - 1}/{MAX_RETRIES} after {RETRY_WAIT_SECONDS}s ...")
+                time.sleep(RETRY_WAIT_SECONDS)
+
+            print(f"  Sending request to {model_id} (max_tokens={DEFAULT_MAX_TOKENS}, "
+                  f"timeout={HTTP_TIMEOUT_SECONDS}s) ...")
+            response = client.chat.completions.create(
+                model=model_id,
+                messages=patched_messages,
+                max_tokens=DEFAULT_MAX_TOKENS,
+                temperature=DEFAULT_TEMPERATURE,
+                timeout=HTTP_TIMEOUT_SECONDS,
+            )
+            content = response.choices[0].message.content or ""
+            content = _strip_think_tags(content)
+            return content.strip()
+        except Exception as e:
+            error_str = str(e)
+            # Retry on transient errors
+            is_transient = any(msg in error_str for msg in [
+                "Model reloaded", "timed out", "Connection error",
+                "Failed to load model",
+            ])
+            if is_transient and attempt <= MAX_RETRIES:
+                print(f"  [WARN] Transient error: {error_str[:120]}")
+                continue
+            return f"[ERROR] Model call failed: {e}"
 
 
 def _patch_thinking_models(model_id: str, messages: list[dict]) -> list[dict]:

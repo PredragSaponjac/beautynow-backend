@@ -14,10 +14,19 @@ DEFAULT_MAX_TOKENS = 4096
 DEFAULT_TEMPERATURE = 0.7
 
 # Pause (seconds) after loading a model before sending requests
-LOAD_WAIT_SECONDS = 8
+# LM Studio needs time to fully initialize models in VRAM
+LOAD_WAIT_SECONDS = 15
 
 # Timeout (seconds) for lms CLI commands (loading 14B models can be slow)
 LMS_TIMEOUT_SECONDS = 300
+
+# HTTP timeout (seconds) for OpenAI API calls
+# Thinking models can take several minutes to generate long responses
+HTTP_TIMEOUT_SECONDS = 600
+
+# Number of retries on transient errors (e.g. "Model reloaded")
+MAX_RETRIES = 2
+RETRY_WAIT_SECONDS = 10
 
 # Model identifiers — must match what LM Studio has downloaded
 # CURRENT: Using the 2 working models in all 4 roles.
