@@ -52,17 +52,27 @@ def check_lms_cli():
 def test_chat(client, model_id):
     """Send a simple chat message and print the response."""
     print(f"\n[TEST] Sending test message to model: {model_id} ...")
+
+    # Qwen3 models need /no_think to avoid thinking-mode parse errors
+    user_msg = "Say hello and confirm you are running locally."
+    if "qwen3" in model_id.lower():
+        user_msg += "\n\n/no_think"
+        print("  [INFO] Qwen3 detected — disabling thinking mode")
+
     try:
         response = client.chat.completions.create(
             model=model_id,
             messages=[
                 {"role": "system", "content": "You are a helpful assistant. Be brief."},
-                {"role": "user", "content": "Say hello and confirm you are running locally."},
+                {"role": "user", "content": user_msg},
             ],
             max_tokens=DEFAULT_MAX_TOKENS,
             temperature=0.7,
         )
-        reply = response.choices[0].message.content.strip()
+        reply = response.choices[0].message.content or ""
+        # Strip any <think>...</think> blocks that may leak through
+        import re
+        reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL).strip()
         print(f"[OK]   Response received ({len(reply)} chars):\n")
         print(reply[:500])
         print()

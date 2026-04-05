@@ -116,15 +116,42 @@ def get_loaded_model_id(client: OpenAI, expected_fragment: str) -> str | None:
 def call_model(client: OpenAI, model_id: str, messages: list[dict]) -> str:
     """Send a chat completion request to the loaded model."""
     try:
+        # Qwen3 models have a "thinking" mode that can cause parse errors
+        # in LM Studio. Disable it by adding /no_think to the last user message.
+        patched_messages = _patch_qwen3_thinking(model_id, messages)
+
         response = client.chat.completions.create(
             model=model_id,
-            messages=messages,
+            messages=patched_messages,
             max_tokens=DEFAULT_MAX_TOKENS,
             temperature=DEFAULT_TEMPERATURE,
         )
-        return response.choices[0].message.content.strip()
+        content = response.choices[0].message.content or ""
+        # Strip any <think>...</think> blocks that may leak through
+        content = _strip_think_tags(content)
+        return content.strip()
     except Exception as e:
         return f"[ERROR] Model call failed: {e}"
+
+
+def _patch_qwen3_thinking(model_id: str, messages: list[dict]) -> list[dict]:
+    """For Qwen3 models, append /no_think to disable internal reasoning."""
+    if "qwen3" not in model_id.lower():
+        return messages
+    patched = []
+    for i, msg in enumerate(messages):
+        if i == len(messages) - 1 and msg.get("role") == "user":
+            patched.append({**msg, "content": msg["content"] + "\n\n/no_think"})
+        else:
+            patched.append(msg)
+    return patched
+
+
+import re
+
+def _strip_think_tags(text: str) -> str:
+    """Remove <think>...</think> blocks from model output."""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
 # ---------------------------------------------------------------------------
