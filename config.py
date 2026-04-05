@@ -8,7 +8,9 @@ BASE_URL = "http://localhost:1234/v1"
 API_KEY = "lm-studio-local"  # dummy key, required by openai client
 
 # Default generation settings
-DEFAULT_MAX_TOKENS = 2048
+# NOTE: Thinking models (DeepSeek-R1, Qwen3) use tokens for internal reasoning
+# before producing visible output. 4096 ensures enough room for both.
+DEFAULT_MAX_TOKENS = 4096
 DEFAULT_TEMPERATURE = 0.7
 
 # Pause (seconds) after loading a model before sending requests
@@ -18,11 +20,15 @@ LOAD_WAIT_SECONDS = 8
 LMS_TIMEOUT_SECONDS = 300
 
 # Model identifiers — must match what LM Studio has downloaded
+# CURRENT: Using the 2 working models in all 4 roles.
+# Once you re-download fixed Qwen models, restore the original config:
+#   "synthesis": "qwen/qwen3-14b",
+#   "coder":     "qwen/qwen2.5-coder-14b",
 MODELS = {
-    "synthesis": "qwen/qwen3-14b",
+    "synthesis": "microsoft/phi-4-reasoning-plus",
     "critic":    "deepseek/deepseek-r1-0528-qwen3-8b",
     "verifier":  "microsoft/phi-4-reasoning-plus",
-    "coder":     "qwen/qwen2.5-coder-14b",
+    "coder":     "deepseek/deepseek-r1-0528-qwen3-8b",
 }
 
 # Pipeline stage labels
