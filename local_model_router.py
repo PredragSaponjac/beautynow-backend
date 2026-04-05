@@ -212,6 +212,7 @@ def run_pipeline(task: str):
 
     # Collect outputs from each stage to feed into the next
     stage_outputs = {}
+    last_loaded_model = None
 
     for stage_key, stage_label in STAGES:
         model_id = MODELS[stage_key]
@@ -221,9 +222,13 @@ def run_pipeline(task: str):
         print(f"  Model: {model_id}")
         print(f"{'—' * 70}")
 
-        # Load this stage's model (unload previous first)
-        unload_all()
-        ensure_model_loaded(model_id)
+        # Only reload if model changed from previous stage
+        if model_id != last_loaded_model:
+            unload_all()
+            ensure_model_loaded(model_id)
+            last_loaded_model = model_id
+        else:
+            print("  [INFO] Same model — skipping reload")
 
         # Build prompt based on stage
         if stage_key == "synthesis":

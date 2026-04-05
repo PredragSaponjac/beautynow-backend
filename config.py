@@ -8,9 +8,9 @@ BASE_URL = "http://localhost:1234/v1"
 API_KEY = "lm-studio-local"  # dummy key, required by openai client
 
 # Default generation settings
-# NOTE: Thinking models (DeepSeek-R1, Qwen3) use tokens for internal reasoning
-# before producing visible output. 4096 ensures enough room for both.
-DEFAULT_MAX_TOKENS = 2048
+# DeepSeek-R1 uses tokens for internal reasoning — keep max_tokens modest
+# to avoid long waits on CPU inference
+DEFAULT_MAX_TOKENS = 1024
 DEFAULT_TEMPERATURE = 0.7
 
 # Pause (seconds) after loading a model before sending requests
@@ -29,15 +29,13 @@ MAX_RETRIES = 2
 RETRY_WAIT_SECONDS = 10
 
 # Model identifiers — must match what LM Studio reports in `lms ls`
-# NOTE: 14B Qwen models (9GB) cannot load on this system (16GB RAM, 2GB VRAM).
-# Using phi-4 and deepseek-r1 (both proven to work) for all 4 roles.
-# To restore 4-model config on a beefier machine, uncomment below:
-#   "synthesis": "qwen_qwen3-14b",
-#   "coder":     "qwen2.5-coder-14b-instruct",
+# NOTE: Only deepseek-r1 (4.4GB) runs reliably on this hardware.
+# Phi-4 (9GB) and Qwen 14B models timeout on CPU with 16GB RAM.
+# Upgrade to 32GB RAM + GPU to use multiple models.
 MODELS = {
-    "synthesis": "microsoft/phi-4-reasoning-plus",
+    "synthesis": "deepseek/deepseek-r1-0528-qwen3-8b",
     "critic":    "deepseek/deepseek-r1-0528-qwen3-8b",
-    "verifier":  "microsoft/phi-4-reasoning-plus",
+    "verifier":  "deepseek/deepseek-r1-0528-qwen3-8b",
     "coder":     "deepseek/deepseek-r1-0528-qwen3-8b",
 }
 
