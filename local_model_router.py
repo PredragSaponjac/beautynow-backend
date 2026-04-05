@@ -290,9 +290,67 @@ def run_pipeline(task: str):
 # Entry point
 # ---------------------------------------------------------------------------
 
+def load_report(filepath: str) -> str:
+    """Load a research report from a text file."""
+    if not os.path.exists(filepath):
+        print(f"[ERROR] Report file not found: {filepath}")
+        sys.exit(1)
+
+    with open(filepath, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    char_count = len(content)
+    word_count = len(content.split())
+    page_est = word_count // 300  # rough estimate
+
+    print(f"[REPORT] Loaded: {filepath}")
+    print(f"  Words: {word_count:,} | Chars: {char_count:,} | ~{page_est} pages")
+
+    # Warn if report is very long (may exceed model context window)
+    if word_count > 8000:
+        print(f"  [WARN] Report is long ({word_count:,} words). "
+              f"Models may truncate input.")
+        print(f"  [HINT] For 50+ page reports, consider summarizing first.")
+
+    return content
+
+
 def main():
-    if len(sys.argv) > 1:
-        task = " ".join(sys.argv[1:])
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="Local 4-model orchestration pipeline via LM Studio"
+    )
+    parser.add_argument(
+        "task", nargs="?", default=None,
+        help="The analysis task (text). Ignored if --report is used."
+    )
+    parser.add_argument(
+        "--report", "-r", type=str, default=None,
+        help="Path to a research report file (.txt, .md). "
+             "The report content is prepended to the task as context."
+    )
+    parser.add_argument(
+        "--task-prompt", "-t", type=str, default=None,
+        help="Custom task/question to ask about the report. "
+             "Defaults to the standard second-derivative analysis prompt."
+    )
+    args = parser.parse_args()
+
+    # Build the task string
+    if args.report:
+        report_content = load_report(args.report)
+        question = args.task_prompt or args.task or DEFAULT_TASK
+
+        task = (
+            f"=== RESEARCH REPORT ===\n\n"
+            f"{report_content}\n\n"
+            f"=== END OF REPORT ===\n\n"
+            f"=== YOUR TASK ===\n\n"
+            f"Based on the research report above, {question}"
+        )
+        print(f"[TASK]   {question[:80]}{'...' if len(question) > 80 else ''}\n")
+    elif args.task:
+        task = args.task
     else:
         task = DEFAULT_TASK
         print("[INFO] No task provided. Using default sample task.\n")

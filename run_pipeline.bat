@@ -3,12 +3,21 @@ echo ============================================================
 echo   LM Studio Local Multi-Model Pipeline
 echo ============================================================
 echo.
+echo   Usage:
+echo     run_pipeline.bat                          (default task)
+echo     run_pipeline.bat "Your custom task"       (custom task)
+echo     run_pipeline.bat --report report.txt      (analyze a report)
+echo     run_pipeline.bat -r report.txt -t "Find trade ideas"
+echo.
+
+REM Use Anaconda Python (system python may not be in PATH)
+set PYTHON=C:\Users\Admin\anaconda3\python.exe
 
 REM Check Python is available
-python --version >nul 2>&1
+%PYTHON% --version >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] Python not found in PATH.
-    echo         Install Python or add it to your PATH.
+    echo [ERROR] Python not found at %PYTHON%
+    echo         Edit this file and set PYTHON to your python.exe path.
     pause
     exit /b 1
 )
@@ -24,7 +33,7 @@ if errorlevel 1 (
 REM Run the pipeline
 echo [START] Running pipeline ...
 echo.
-python local_model_router.py %*
+%PYTHON% local_model_router.py %*
 
 echo.
 echo [DONE] Pipeline finished. Check the outputs/ folder.
