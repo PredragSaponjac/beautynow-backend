@@ -73,7 +73,7 @@ def test_chat(client, model_id):
     try:
         subprocess.run(
             ["lms", "load", model_id],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, timeout=300,
             shell=_IS_WINDOWS,
         )
         import time

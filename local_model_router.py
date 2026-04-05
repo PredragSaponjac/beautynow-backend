@@ -50,6 +50,7 @@ def lms_run(command: list[str], label: str, timeout: int = LMS_TIMEOUT_SECONDS) 
         result = subprocess.run(
             cmd, capture_output=True, text=True,
             timeout=timeout, shell=_IS_WINDOWS,
+            encoding="utf-8", errors="replace",
         )
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()
