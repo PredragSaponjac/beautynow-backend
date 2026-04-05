@@ -10,7 +10,7 @@ API_KEY = "lm-studio-local"  # dummy key, required by openai client
 # Default generation settings
 # DeepSeek-R1 uses tokens for internal reasoning — keep max_tokens modest
 # to avoid long waits on CPU inference
-DEFAULT_MAX_TOKENS = 1024
+DEFAULT_MAX_TOKENS = 2048
 DEFAULT_TEMPERATURE = 0.7
 
 # Pause (seconds) after loading a model before sending requests

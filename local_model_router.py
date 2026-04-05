@@ -137,15 +137,14 @@ def call_model(client: OpenAI, model_id: str, messages: list[dict]) -> str:
 
 def _patch_thinking_models(model_id: str, messages: list[dict]) -> list[dict]:
     """
-    Disable thinking/reasoning mode for models that use it.
-    - Qwen3 models: append /no_think
-    - DeepSeek R1 models: also append /no_think (similar issue)
+    Only disable thinking for Qwen3 models (which crash without /no_think).
+    DeepSeek-R1 handles thinking internally — we just strip <think> tags
+    from the output instead.
     """
-    needs_patch = any(tag in model_id.lower() for tag in ["qwen3", "deepseek-r1"])
-    if not needs_patch:
+    if "qwen3" not in model_id.lower() or "deepseek" in model_id.lower():
         return messages
 
-    print(f"  [INFO] Thinking-mode model detected — adding /no_think")
+    print(f"  [INFO] Qwen3 model detected — adding /no_think")
     patched = []
     for i, msg in enumerate(messages):
         if i == len(messages) - 1 and msg.get("role") == "user":
