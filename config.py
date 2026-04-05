@@ -28,16 +28,12 @@ HTTP_TIMEOUT_SECONDS = 600
 MAX_RETRIES = 2
 RETRY_WAIT_SECONDS = 10
 
-# Model identifiers — must match what LM Studio has downloaded
-# CURRENT: Using the 2 working models in all 4 roles.
-# Once you re-download fixed Qwen models, restore the original config:
-#   "synthesis": "qwen/qwen3-14b",
-#   "coder":     "qwen/qwen2.5-coder-14b",
+# Model identifiers — must match what LM Studio reports in `lms ls`
 MODELS = {
-    "synthesis": "microsoft/phi-4-reasoning-plus",
+    "synthesis": "qwen_qwen3-14b",
     "critic":    "deepseek/deepseek-r1-0528-qwen3-8b",
     "verifier":  "microsoft/phi-4-reasoning-plus",
-    "coder":     "deepseek/deepseek-r1-0528-qwen3-8b",
+    "coder":     "qwen2.5-coder-14b-instruct",
 }
 
 # Pipeline stage labels
